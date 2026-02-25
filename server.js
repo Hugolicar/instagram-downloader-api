@@ -220,6 +220,6 @@ app.listen(PORT, '0.0.0.0', () => {
   });
 });
 
-Commit message: Fix: Adiciona endpoint /health
+
 
 
