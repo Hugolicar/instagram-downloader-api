@@ -8,13 +8,25 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Configuração do PostgreSQL
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+// Healthcheck IMEDIATO (antes de tudo)
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'online', 
+    memory: dbConnected ? 'PostgreSQL connected' : 'PostgreSQL disconnected',
+    timestamp: new Date().toISOString()
+  });
 });
 
-// Inicialização do banco
+// Configuração do PostgreSQL
+let dbConnected = false;
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  connectionTimeoutMillis: 5000,
+  query_timeout: 5000
+});
+
+// Inicialização do banco (não bloqueia o servidor)
 async function initDB() {
   try {
     await pool.query(`
@@ -29,33 +41,45 @@ async function initDB() {
         last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    console.log('✅ Banco de dados inicializado');
+    dbConnected = true;
+    console.log('✅ Banco de dados conectado');
   } catch (err) {
-    console.error('❌ Erro DB:', err);
+    console.error('❌ Erro DB (continuando sem cache):', err.message);
+    dbConnected = false;
   }
 }
 
 // Verificar cache
 async function checkExistingDownload(url) {
-  const result = await pool.query(
-    'SELECT * FROM downloads WHERE url = $1 AND status = $2',
-    [url, 'success']
-  );
-  if (result.rows.length > 0) {
-    await pool.query('UPDATE downloads SET last_accessed = CURRENT_TIMESTAMP WHERE id = $1', [result.rows[0].id]);
-    return result.rows[0];
+  if (!dbConnected) return null;
+  try {
+    const result = await pool.query(
+      'SELECT * FROM downloads WHERE url = $1 AND status = $2',
+      [url, 'success']
+    );
+    if (result.rows.length > 0) {
+      await pool.query('UPDATE downloads SET last_accessed = CURRENT_TIMESTAMP WHERE id = $1', [result.rows[0].id]);
+      return result.rows[0];
+    }
+    return null;
+  } catch (err) {
+    return null;
   }
-  return null;
 }
 
 // Salvar download
 async function saveDownload(url, data) {
-  await pool.query(`
-    INSERT INTO downloads (url, download_url, media_type, filename, status)
-    VALUES ($1, $2, $3, $4, $5)
-    ON CONFLICT (url) DO UPDATE SET 
-      download_url = $2, media_type = $3, filename = $4, status = $5, last_accessed = CURRENT_TIMESTAMP
-  `, [url, data.downloadUrl, data.type, data.filename, 'success']);
+  if (!dbConnected) return;
+  try {
+    await pool.query(`
+      INSERT INTO downloads (url, download_url, media_type, filename, status)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (url) DO UPDATE SET 
+        download_url = $2, media_type = $3, filename = $4, status = $5, last_accessed = CURRENT_TIMESTAMP
+    `, [url, data.downloadUrl, data.type, data.filename, 'success']);
+  } catch (err) {
+    console.error('Erro ao salvar:', err.message);
+  }
 }
 
 // Extrair do Instagram
@@ -85,17 +109,12 @@ async function extractInstagramData(url) {
 }
 
 // Endpoints
-app.get('/', async (req, res) => {
-  const stats = await pool.query('SELECT COUNT(*) as total FROM downloads WHERE status=$1', ['success']);
-  res.json({ status: 'online', memory: 'PostgreSQL', total_downloads: stats.rows[0].total });
-});
-
 app.post('/igdl', async (req, res) => {
   try {
     const { url, force_refresh = false } = req.body;
     if (!url?.includes('instagram.com')) return res.status(400).json({ error: 'URL inválida' });
 
-    if (!force_refresh) {
+    if (!force_refresh && dbConnected) {
       const existing = await checkExistingDownload(url);
       if (existing) {
         return res.json({ success: true, cached: true, data: existing });
@@ -112,12 +131,15 @@ app.post('/igdl', async (req, res) => {
 });
 
 app.get('/history', async (req, res) => {
+  if (!dbConnected) return res.json({ error: 'Banco desconectado', downloads: [] });
   const result = await pool.query('SELECT * FROM downloads ORDER BY last_accessed DESC LIMIT 10');
   res.json({ downloads: result.rows });
 });
 
+// INICIA SERVIDOR IMEDIATAMENTE
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, async () => {
-  await initDB();
-  console.log(`🚀 API com MEMÓRIA rodando na porta ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 API rodando na porta ${PORT}`);
+  // Tenta conectar no DB depois de iniciar
+  initDB();
 });
