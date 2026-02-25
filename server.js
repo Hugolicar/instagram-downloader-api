@@ -141,3 +141,5 @@ app.listen(PORT, async () => {
   await initDB();
   console.log(`🚀 API com MEMÓRIA rodando na porta ${PORT}`);
 });
+
+Commit message: Fix: Adiciona endpoint /health
