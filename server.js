@@ -206,8 +206,7 @@ app.get('/history', async (req, res) => {
 // ==========================================
 const PORT = process.env.PORT || 3000;
 
-// Inicia servidor IMEDIATAMENTE (para healthcheck passar)
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 API rodando na porta ${PORT}`);
   console.log('⏳ Inicializando banco de dados...');
   
@@ -216,10 +215,11 @@ app.listen(PORT, () => {
     if (dbConnected) {
       console.log('✅ Banco pronto!');
     } else {
-      console.log('⚠️  Banco indisponível, API funciona sem cache');
+      console.log('⚠️ Banco indisponível, API funciona sem cache');
     }
   });
 });
 
 Commit message: Fix: Adiciona endpoint /health
+
 
